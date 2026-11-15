@@ -1,5 +1,7 @@
 # Go Coding Agent
 
+![Test](https://github.com/yenhunghuang/go-coding-agent/actions/workflows/test.yml/badge.svg)
+
 用 **Go 標準函式庫** 學習 coding agent：一個看得完的 tool loop、四個工具，以及 Go 真正在用的那套習慣——`context`、error 當值、`httptest` 與 table-driven test。
 
 零外部依賴。CLI、HTTP、JSON、子程序與逾時全部由 Go 標準函式庫處理；沒有 framework、沒有 registry、沒有 event bus。
