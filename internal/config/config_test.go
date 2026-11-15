@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"flag"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -48,8 +49,10 @@ func TestParseDefaults(t *testing.T) {
 		t.Errorf("BaseURL = %q", cfg.BaseURL)
 	}
 	// The workspace is resolved, so later path checks compare absolute paths.
-	if !strings.HasPrefix(cfg.Workspace, "/") {
-		t.Errorf("Workspace = %q", cfg.Workspace)
+	// filepath.IsAbs, not a "/" prefix: an absolute path on Windows starts
+	// with a drive letter.
+	if !filepath.IsAbs(cfg.Workspace) {
+		t.Errorf("Workspace = %q is not absolute", cfg.Workspace)
 	}
 }
 
