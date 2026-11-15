@@ -9,8 +9,11 @@ import (
 )
 
 func TestResolvePathStaysInsideWorkspace(t *testing.T) {
-	root := t.TempDir()
-	outside := t.TempDir()
+	// ResolvePath returns symlink-resolved paths, so the expectation has to be
+	// resolved too. On macOS t.TempDir is /var/... but resolves to
+	// /private/var/...; comparing the raw value would fail for every case.
+	root := resolve(t, t.TempDir())
+	outside := resolve(t, t.TempDir())
 
 	if err := os.WriteFile(filepath.Join(root, "real.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
@@ -60,6 +63,15 @@ func TestResolvePathStaysInsideWorkspace(t *testing.T) {
 			}
 		})
 	}
+}
+
+func resolve(t *testing.T, path string) string {
+	t.Helper()
+	got, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
 }
 
 func TestReadTextRejectsNonText(t *testing.T) {

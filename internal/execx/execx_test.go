@@ -32,7 +32,8 @@ func TestRunReportsOutputAndExitCode(t *testing.T) {
 		t.Error("OK() is true for a failing command")
 	}
 
-	res, err = Run(context.Background(), "pwd", dir, 10*time.Second, 1000)
+	// pwd -P is the physical path, which is what cmd.Dir actually chdir'd to.
+	res, err = Run(context.Background(), "pwd -P", dir, 10*time.Second, 1000)
 	if err != nil {
 		t.Fatal(err)
 	}

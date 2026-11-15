@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -107,13 +108,23 @@ func setup(t *testing.T, srv *httptest.Server, enabled ...string) (*config.Confi
 }
 
 func TestRunDrivesAFourToolLoop(t *testing.T) {
+	// The last call proves the edit landed on disk. bash is not guaranteed on
+	// Windows, so the read tool does the same job there.
+	verify := call("bash", `{"command":"test \"$(cat a)\" = new && echo passed"}`)
+	want := []string{"call-write", "call-read", "call-edit", "call-bash"}
+	verified := "passed"
+	if runtime.GOOS == "windows" {
+		verify = call("read", `{"path":"a"}`)
+		want[3] = "call-read"
+		verified = "new"
+	}
 	srv, seen := mockModel(t,
 		toolCallsReply(call("write", `{"path":"a","content":"old"}`)),
 		toolCallsReply(
 			call("read", `{"path":"a"}`),
 			call("edit", `{"path":"a","old_text":"old","new_text":"new"}`),
 		),
-		toolCallsReply(call("bash", `{"command":"test \"$(cat a)\" = new && echo passed"}`)),
+		toolCallsReply(verify),
 		finalReply("Finished"),
 	)
 	cfg, registry := setup(t, srv)
@@ -167,15 +178,15 @@ func TestRunDrivesAFourToolLoop(t *testing.T) {
 		}
 		outputs = append(outputs, env.Result.Output)
 	}
-	// The bash result is what proves the edit really happened on disk.
-	if len(outputs) > 0 && !strings.Contains(outputs[len(outputs)-1], "passed") {
-		t.Errorf("last tool output = %q", outputs[len(outputs)-1])
+	// The last tool result is what proves the edit really happened on disk.
+	if len(outputs) > 0 && !strings.Contains(outputs[len(outputs)-1], verified) {
+		t.Errorf("last tool output = %q, want it to contain %q",
+			outputs[len(outputs)-1], verified)
 	}
-	want := []string{"call-write", "call-read", "call-edit", "call-bash"}
 	if strings.Join(ids, ",") != strings.Join(want, ",") {
 		t.Errorf("tool_call_ids = %v, want %v", ids, want)
 	}
-	for _, marker := range []string{"[tool] write", "[tool] read", "[tool] edit", "[tool] bash"} {
+	for _, marker := range []string{"[tool] write", "[tool] read", "[tool] edit", "[tool] " + want[3][5:]} {
 		if !strings.Contains(progress.String(), marker) {
 			t.Errorf("progress is missing %q:\n%s", marker, progress.String())
 		}
