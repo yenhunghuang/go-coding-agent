@@ -38,7 +38,13 @@ func (c *Config) Allows(name string) bool {
 	return slices.Contains(c.Tools, name)
 }
 
-const usage = `Usage: go run ./cmd/agent [flags] 'prompt'
+// Interactive is true when no prompt was given: the CLI opens a REPL and keeps
+// one conversation instead of answering a single request.
+func (c *Config) Interactive() bool { return c.Prompt == "" }
+
+const usage = `Usage: go run ./cmd/agent [flags] ['prompt']
+
+With no prompt the agent opens a REPL: one conversation, one line per request.
 
   -workspace PATH   working directory (default .)
   -tools NAMES      read,write,edit,bash (or a teaching subset)
@@ -94,9 +100,8 @@ func Parse(args []string) (*Config, error) {
 			}
 		}
 	}
-	if strings.TrimSpace(c.Prompt) == "" {
-		return nil, fmt.Errorf("provide a prompt; use --help for usage")
-	}
+	// An empty prompt is not an error: it means interactive mode.
+	c.Prompt = strings.TrimSpace(c.Prompt)
 	if strings.TrimSpace(c.Model) == "" {
 		return nil, fmt.Errorf("set OPENAI_MODEL or -model")
 	}

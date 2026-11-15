@@ -116,6 +116,79 @@ go run ./cmd/agent -tools read "用三句話說明 internal/model/stream.go"
 
 串流與非串流最後都進同一個 `validate`：沒有 choices、tool call 沒有 id、id 重複、`finish_reason` 不是 `tool_calls`／`stop`，兩條路徑都一樣拒絕。這是把「傳輸」與「協定」分開的實際好處。
 
+## 第五步：REPL，以及一段真正的對話
+
+```bash
+go run ./cmd/agent -workspace /tmp/go-agent-practice   # 不給 prompt 就是互動模式
+```
+
+先問一個問題，再問第二個「那它呢？」——模型會記得上一輪。這背後的改動只有三個，每個都是 Go 的必修課。
+
+**1. 把狀態搬到參數與回傳值。** `agent.Run` 拆成 `RunTurn`：歷史從參數進、從回傳值出，函式本身無狀態。
+
+```go
+func RunTurn(
+	ctx context.Context,
+	cfg *config.Config,
+	client *model.Client,
+	registry *tools.Registry,
+	messages []model.Message,
+	progress io.Writer,
+) (string, []model.Message, error)
+
+func Run(...) (string, error) {   // 單發模式只是它的一個 wrapper
+    answer, _, err := RunTurn(ctx, cfg, client, registry, InitialMessages(cfg.Prompt), progress)
+    return answer, err
+}
+```
+
+`RunTurn` 第一行是 `messages = slices.Clone(messages)`。這是 Go 最容易踩的坑之一：`append` 可能會寫進呼叫端的 backing array，於是「你傳進去的 slice」和「你拿回來的 slice」共用同一塊記憶體。測試直接驗這件事：
+
+```go
+if &history[0] == &start[0] {
+    t.Error("RunTurn appended into the caller's slice")
+}
+```
+
+**2. 最終答案也要進歷史。** 單發模式看不出差別，但如果 assistant 的最後一則訊息不存進歷史，第二輪就看不到自己剛說了什麼。這是做多輪時第一個會發現的 bug。
+
+**3. 兩個 context，範圍不同。**
+
+```go
+turnCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)  // 每一輪一個
+answer, next, err := agent.RunTurn(turnCtx, ...)
+stop()
+```
+
+`ctx` 是 session，`turnCtx` 是這一輪。Ctrl-C 只取消 `turnCtx`，所以卡住的 bash 或很慢的模型請求會停，但提示字元回來。對照單發模式：那裏只有一個 `signal.NotifyContext`，因為整個程序就是這一輪。
+
+中斷會留下一個不能用的歷史：assistant 要求了 tool，但 tool 結果沒有全部進來，下一次請求會被 API 拒絕。所以 REPL 回滾到上一個完整交換：
+
+```go
+if interrupted(err, ctx) {
+    history = append(before, model.Message{Role: "user", Content: "(the previous request was interrupted)"})
+}
+```
+
+`interrupted` 只有兩行，但它是整個中斷策略，所以有自己一張 table test：turn 被取消而 session 還活著 → 繼續；session 本身被取消 → 結束。
+
+中斷這條路徑靠 signal，測試不好模擬，所以手動驗證（注意：在 script 裡用 `&` 背台跑会被继承 `SIG_IGN`，Go 的 `signal.Notify` 對它無效，要先 `set -m`）：
+
+```bash
+mkfifo /tmp/in
+./build/agent -tools bash -stream=false < /tmp/in &   # 先 set -m
+printf 'run: sleep 25 then echo done\n' >&3
+kill -INT $!                                          # 應該看到 (interrupted) 與新的 you>
+```
+
+看到 `(interrupted)` 代表 `turnCtx` 被取消、bash 的 process group 被 SIGKILL，而 session 沒死。
+
+練習（由易到難）：
+
+1. `/save FILE` 與 `/load FILE`。`model.Message` 已經有 json tag，`json.MarshalIndent(history)` 就是 session 檔。
+2. 寫 `truncateIncomplete(messages)`，只丟掉最後一個不完整的 assistant/tool 區塊，保留已經完成的工具結果，取代現在的整体回滾。
+3. 把 `bufio.Scanner` 換成自帶行編輯的輸入（方向鍵、歷史列），注意這需要把終端切到 raw mode。
+
 ## 再深入基礎設施
 
 `internal/model/client.go` 有兩件事值得停下來看：
@@ -127,4 +200,4 @@ go run ./cmd/agent -tools read "用三句話說明 internal/model/stream.go"
 
 測試部分先讀 `internal/agent/agent_test.go`：`httptest.Server` 回放腳本，並記錄每次請求，所以測試能斷言「模型最後真的看到這 4 個 tool_call_id」。`t.TempDir()` 每個測試一個工作區，結束自動清掉。`internal/execx/execx_test.go` 則用 `(sleep 2; touch escaped) & wait` 證明 process group 真的被殺掉。
 
-下一步先加入每輪 token 用量統計與 REPL，再做 session 持久化。每次只改一個邊界，維持四個工具的介面。詳見 [架構與擴充](architecture.md)。
+下一步先做 session 持久化（`/save`、`/load`），再加 context 用量統計。每次只改一個邊界，維持四個工具的介面。詳見 [架構與擴充](architecture.md)。

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/yenhunghuang/go-coding-agent/internal/config"
 	"github.com/yenhunghuang/go-coding-agent/internal/model"
@@ -30,7 +31,23 @@ func InitialMessages(prompt string) []model.Message {
 	}
 }
 
-// Run drives the conversation until the model answers without tool calls.
+// Run answers one prompt: it builds the initial history and calls RunTurn.
+// It is kept because the single-shot CLI is the simplest caller.
+func Run(
+	ctx context.Context,
+	cfg *config.Config,
+	client *model.Client,
+	registry *tools.Registry,
+	progress io.Writer,
+) (string, error) {
+	answer, _, err := RunTurn(
+		ctx, cfg, client, registry, InitialMessages(cfg.Prompt), progress,
+	)
+	return answer, err
+}
+
+// RunTurn drives the conversation until the model answers without tool calls,
+// then returns that answer and the grown history.
 //
 // Each turn does three things:
 //  1. send the whole history plus the enabled tool schemas;
@@ -41,19 +58,26 @@ func InitialMessages(prompt string) []model.Message {
 // Tools run sequentially on purpose: write then read then edit must be
 // predictable before anything is parallel.
 //
+// The history lives outside the function, which is what makes a session
+// possible: the REPL calls RunTurn once per user prompt and passes the
+// returned slice back in. RunTurn clones what it receives rather than writing
+// into the caller's backing array, so the returned value is the only history
+// to keep.
+//
 // progress receives tool names, token counts and streamed deltas. The final
 // answer is returned, not printed, so the caller decides where it goes.
-func Run(
+func RunTurn(
 	ctx context.Context,
 	cfg *config.Config,
 	client *model.Client,
 	registry *tools.Registry,
+	messages []model.Message,
 	progress io.Writer,
-) (string, error) {
-	messages := InitialMessages(cfg.Prompt)
+) (string, []model.Message, error) {
+	messages = slices.Clone(messages)
 	for turn := 1; turn <= cfg.MaxTurns; turn++ {
 		if err := ctx.Err(); err != nil {
-			return "", err
+			return "", messages, err
 		}
 		var (
 			assistant *model.Message
@@ -74,7 +98,7 @@ func Run(
 			)
 		}
 		if err != nil {
-			return "", fmt.Errorf("turn %d: %w", turn, err)
+			return "", messages, fmt.Errorf("turn %d: %w", turn, err)
 		}
 		if usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
 			fmt.Fprintf(progress,
@@ -83,7 +107,11 @@ func Run(
 			)
 		}
 		if len(assistant.ToolCalls) == 0 {
-			return assistant.Content, nil
+			// The answer belongs in the history too. Without it a second
+			// request would forget what the model just said, and a REPL
+			// session could never refer back to earlier turns.
+			messages = append(messages, *assistant)
+			return assistant.Content, messages, nil
 		}
 		messages = append(messages, *assistant)
 		for _, call := range assistant.ToolCalls {
@@ -96,7 +124,7 @@ func Run(
 			})
 		}
 	}
-	return "", fmt.Errorf(
+	return "", messages, fmt.Errorf(
 		"turn limit reached (%d); task may be incomplete", cfg.MaxTurns,
 	)
 }

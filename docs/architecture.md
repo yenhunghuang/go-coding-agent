@@ -6,9 +6,9 @@
 
 | 套件 | 擁有的責任 | 擴充方向 |
 |---|---|---|
-| `cmd/agent` | 進程邊界：signal、stdout／stderr、exit code | REPL、輸入方式 |
+| `cmd/agent` | 進程邊界：signal、stdout／stderr、exit code、REPL | 輸入方式、session 存檔 |
 | `internal/config` | CLI 與環境變數，一次驗證 | 設定檔、profile |
-| `internal/agent` | 訊息歷史、回合、工具結果關聯 | session、context 壓縮、事件 callback |
+| `internal/agent` | 訊息歷史、回合、工具結果關聯 | context 壓縮、事件 callback |
 | `internal/model` | 模型請求、完整性驗證、串流 | usage 統計、重試策略、provider 差異 |
 | `internal/tools` | 參數驗證、四個工具、統一結果 | 改善工具內部 |
 | `internal/tools/tools.json` | 模型看到的規格 | 參數說明與 schema |
@@ -24,11 +24,14 @@
 `ctx` 從 `main` 的 `signal.NotifyContext` 開始，往下到 `model.post`（HTTP 請求）、`execx.Run`（子程序）。三個層級各自再加一層限制：
 
 ```text
-main     signal.NotifyContext        Ctrl-C 停止整個執行
+main     signal.NotifyContext        Ctrl-C 停止整個執行（單發模式）
+repl     signal.NotifyContext        每一輪一個，Ctrl-C 只停止這一輪
 agent    cfg.MaxTurns                回合上限（不是 ctx，是可讀的迴圈條件）
 model    http.Client{Timeout: 120s}  單一請求上限
 execx    context.WithTimeout(30s)    單一命令上限，並殺掉 process group
 ```
+
+互動模式把範圍縮一層：`repl` 在每次請求前建立自己的 `signal.NotifyContext(ctx, ...)`，結束後立刻 `stop()`。所以 Ctrl-C 殺掉的是這一輪的 HTTP 請求與 bash 程序群組，session 繼續。判斷只看兩行：`errors.Is(err, context.Canceled) && session.Err() == nil`。
 
 取消的傳播是自動的：`exec.CommandContext` 在 ctx 結束時呼叫 `Cmd.Cancel`，`proc_unix.go` 那裏對整個 process group 發 SIGKILL；`Cmd.WaitDelay` 保證被遺留的孫程序不會用 pipe 把 `Wait` 卡住。
 
@@ -50,7 +53,7 @@ HTTP request 沒有上限（由呼叫端控制），response 最多 4 MiB，每�
 
 依真實需求逐項加入：
 
-1. 讓 `agent.Run` 暴露訊息歷史，`cmd/agent` 建立 REPL 與保存 session。歷史是 `[]model.Message`，寫成 JSON 就是 session 檔。
+1. REPL 已在 `cmd/agent/repl.go`，`agent.RunTurn` 已經進出歷史。下一步是 `/save` 與 `/load`：歷史是 `[]model.Message`，寫成 JSON 就是 session 檔。中斷時目前是整体回滾，可改成只修剪最後一個不完整的 tool 區塊。
 2. 在 `model` 保留 usage（串流已經讀取 `usage`），先量測 context，再設計裁切／摘要。
 3. 把 `progress io.Writer` 換成很小的 callback interface，讓 TUI 或 logging 共用同一個 loop。
 4. 若需要執行前審核，在 `Registry.Execute` 前加 policy hook，不把 UI 混入工具。
@@ -69,7 +72,7 @@ bash 使用使用者環境與權限；process group 清理不等同容器隔離�
 
 ## 與 Mojo 版同步的規則
 
-兩個專案刻意維持相同的行為，方便對照：四個工具、同樣的預設值與上限、同樣的 `{"ok": ...}` 信封、同樣的回合上限與 workspace 檢查。刻意不同處只有兩項：Go 版預設串流，以及 `null` 參數在 Go 版會保留預設值。
+兩個專案刻意維持相同的行為，方便對照：四個工具、同樣的預設值與上限、同樣的 `{"ok": ...}` 信封、同樣的回合上限與 workspace 檢查。刻意不同處只有三項：Go 版預設串流、`null` 參數在 Go 版會保留預設值，以及 Go 版有互動 REPL（Mojo 版只有單發）。
 
 ## 參考
 

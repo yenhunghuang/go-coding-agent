@@ -65,7 +65,7 @@ func TestRunWritesFilesAndPrintsTheAnswer(t *testing.T) {
 		"-tools", "read,write",
 		"-stream=false",
 		"create hello.txt",
-	}, &stdout, &stderr)
+	}, strings.NewReader(""), &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("run: %v\n%s", err, stderr.String())
 	}
@@ -104,7 +104,7 @@ func TestRunStreamsByDefault(t *testing.T) {
 		"-model", "test/model",
 		"-tools", "read",
 		"say all good",
-	}, &stdout, &stderr)
+	}, strings.NewReader(""), &stdout, &stderr)
 	if err != nil {
 		t.Fatalf("run: %v\n%s", err, stderr.String())
 	}
@@ -118,7 +118,7 @@ func TestRunStreamsByDefault(t *testing.T) {
 
 func TestRunHelpExitsCleanly(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if err := run(context.Background(), []string{"--help"}, &stdout, &stderr); err != nil {
+	if err := run(context.Background(), []string{"--help"}, strings.NewReader(""), &stdout, &stderr); err != nil {
 		t.Fatalf("run --help: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "Usage:") {
@@ -128,7 +128,7 @@ func TestRunHelpExitsCleanly(t *testing.T) {
 
 func TestRunReportsBadFlags(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if err := run(context.Background(), []string{"-max-turns", "0", "hello"}, &stdout, &stderr); err == nil {
+	if err := run(context.Background(), []string{"-max-turns", "0", "hello"}, strings.NewReader(""), &stdout, &stderr); err == nil {
 		t.Fatal("run accepted -max-turns 0")
 	}
 }

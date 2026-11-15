@@ -21,15 +21,20 @@ import (
 )
 
 func main() {
-	if err := run(context.Background(), os.Args[1:], os.Stdout, os.Stderr); err != nil {
+	if err := run(context.Background(), os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
 }
 
-// run is separate from main so tests can pass arguments, capture output and
-// cancel the context without touching the real process.
-func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+// run is separate from main so tests can pass arguments, script stdin,
+// capture output and cancel the context without touching the real process.
+func run(
+	ctx context.Context,
+	args []string,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+) error {
 	cfg, err := config.Parse(args)
 	if errors.Is(err, flag.ErrHelp) {
 		config.Describe(stdout) // --help is a normal exit, not an error
@@ -38,16 +43,23 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	// Ctrl-C cancels ctx, which cancels the in-flight HTTP request and kills
-	// the process group of any running bash command.
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	registry, err := tools.NewRegistry(cfg)
 	if err != nil {
 		return err
 	}
 	client := model.New(cfg.BaseURL, cfg.APIKey)
+
+	// No prompt means interactive mode. The REPL installs its own signal
+	// handler per request, so it must not inherit a session-wide one.
+	if cfg.Interactive() {
+		return repl(ctx, cfg, client, registry, stdin, stdout, stderr)
+	}
+
+	// One-shot mode: Ctrl-C cancels ctx, which cancels the in-flight HTTP
+	// request and kills the process group of any running bash command.
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	answer, err := agent.Run(ctx, cfg, client, registry, stderr)
 	if err != nil {
 		return err

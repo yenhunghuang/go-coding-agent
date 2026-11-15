@@ -34,12 +34,23 @@ go run ./cmd/agent -workspace /absolute/path/to/your/project \
 
 stdout 只有最終答案；`[tool] ...`、token 用量與串流增量都寫到 stderr，所以管線只看到一個結果。
 
+沒有給 prompt 就進入互動模式（REPL）：一段對話、一行一個需求，歷史會留著。
+
+```bash
+go run ./cmd/agent -workspace ~/my/project
+#   agent in /home/you/my/project (read, write, edit, bash)
+#   you> 讀 main.go，說明它在做什麼
+#   you> 那第二個函式呢？            ← 記得上一輪
+#   /tools /clear /help /quit，Ctrl-D 也離開；Ctrl-C 只中斷當前需求
+```
+
 將 model 換成你在 Bifrost 設定的 `provider/model`。直連其他 OpenAI-compatible 服務也可，只需調整 base URL、model 與 API key。Base URL 包含服務所需前綴（例如 `/v1`）；程式只附加 `/chat/completions`。模型必須支援 function tool calling。`.env.example` 是 shell 設定範例，程式不會自動載入 `.env`。
 
 ## 先讀哪裡
 
 ```text
 cmd/agent/main.go     CLI → configuration → agent
+cmd/agent/repl.go     互動模式：一段對話，每回合可單獨取消
 internal/config/      少量明確的 CLI 參數與環境變數
 internal/agent/       訊息歷史 → 模型 → 工具 → 下一輪
 internal/model/       OpenAI 請求、完整性檢查、SSE 串流
@@ -84,6 +95,7 @@ internal/execx/       子程序、有界輸出、逾時與程序群組
 | 平台邊界 | 只支援 POSIX | build constraints：`proc_unix.go`／`proc_windows.go` |
 | 測試 | Mojo 寫的低階 mock HTTP server（raw socket） | `httptest.Server`、`t.TempDir()`、table-driven、`go test -race` |
 | 串流 | 列為未來工作 | 預設開啟，SSE 增量組回同一個驗證規則 |
+| 互動 | 只有單發一個 prompt | 不給 prompt 就進 REPL，歷史留在記憶體 |
 
 行為上有一處刻意不同：`{"limit": null}` 在 Go 版會保留預設值（`encoding/json` 對 `null` 是「不改动」），Mojo 版則視為參數錯誤。
 

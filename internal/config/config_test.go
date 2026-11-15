@@ -56,9 +56,24 @@ func TestParseDefaults(t *testing.T) {
 	}
 }
 
+// An empty prompt is not an error: it selects interactive mode.
+func TestParseWithoutPromptIsInteractive(t *testing.T) {
+	cfg, err := Parse([]string{"-model", "m"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Interactive() {
+		t.Errorf("Prompt = %q, want interactive", cfg.Prompt)
+	}
+	if cfg, err = Parse([]string{"-model", "m", "   "}); err != nil {
+		t.Fatal(err)
+	} else if !cfg.Interactive() {
+		t.Errorf("Prompt = %q, want interactive", cfg.Prompt)
+	}
+}
+
 func TestParseRejectsBadInput(t *testing.T) {
 	cases := map[string][]string{
-		"no prompt":         {"-model", "m"},
 		"two positional":    {"-model", "m", "one", "two"},
 		"no model":          {"hello"},
 		"unknown tool":      {"-model", "m", "-tools", "read,rm", "hello"},

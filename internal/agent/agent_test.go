@@ -290,3 +290,64 @@ func TestRunStopsWhenCancelled(t *testing.T) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 }
+
+// RunTurn keeps the conversation outside itself, which is what lets a REPL ask
+// several questions in one session: the second call sees the first answer.
+func TestRunTurnContinuesOneConversation(t *testing.T) {
+	srv, seen := mockModel(t,
+		toolCallsReply(call("write", `{"path":"a","content":"first"}`)),
+		finalReply("wrote a"),
+		finalReply("a holds first"),
+	)
+	cfg, registry := setup(t, srv)
+	cfg.Stream = false
+	client := model.New(cfg.BaseURL, cfg.APIKey)
+
+	start := InitialMessages("create a")
+	answer, history, err := RunTurn(
+		context.Background(), cfg, client, registry, start, io.Discard,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer != "wrote a" {
+		t.Errorf("answer = %q", answer)
+	}
+	// system, user, assistant(tool_calls), tool, assistant
+	if len(history) != 5 {
+		t.Fatalf("history = %d messages: %+v", len(history), history)
+	}
+	// RunTurn clones what it receives: appending to the returned history must
+	// not write into the caller's backing array.
+	if &history[0] == &start[0] {
+		t.Error("RunTurn appended into the caller's slice")
+	}
+
+	history = append(history, model.Message{Role: "user", Content: "what is in a?"})
+	answer, history, err = RunTurn(
+		context.Background(), cfg, client, registry, history, io.Discard,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer != "a holds first" {
+		t.Errorf("second answer = %q", answer)
+	}
+
+	// Request 3 is the second prompt: the model has to see its own earlier
+	// answer and the tool result that produced it.
+	if len(*seen) != 3 {
+		t.Fatalf("model saw %d requests", len(*seen))
+	}
+	var roles []string
+	for _, m := range (*seen)[2].Messages {
+		roles = append(roles, m.Role+":"+m.Content)
+	}
+	joined := strings.Join(roles, "|")
+	if !strings.Contains(joined, "assistant:wrote a") {
+		t.Errorf("second request lost the previous answer: %s", joined)
+	}
+	if !strings.Contains(joined, "user:what is in a?") {
+		t.Errorf("second request lost the new question: %s", joined)
+	}
+}
